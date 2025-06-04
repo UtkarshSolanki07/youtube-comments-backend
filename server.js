@@ -21,55 +21,43 @@ function preprocessComments(comments) {
         .slice(0, 120); // Limit for token efficiency
 }
 
-// Advanced prompt engineering with structured analysis
-function createAnalysisPrompt(comments) {
-    const commentText = comments.join('\n• ');
-    
-    return `You are an expert content analyst specializing in audience feedback interpretation. Analyze these YouTube comments to provide a comprehensive yet concise video assessment.
+// Improved prompt for concise, valuable, and well-structured markdown analysis
+function createMarkdownAnalysisPrompt(comments) {
+    const commentText = comments.join('\n- ');
+    return `
+You are an expert YouTube audience analyst. Your task is to analyze the following comments and produce a concise, actionable summary in **clear markdown**.
 
-COMMENTS TO ANALYZE:
-• ${commentText}
+## Comments to Analyze
+- ${commentText}
 
-ANALYSIS FRAMEWORK:
-Your response must be exactly 3-4 paragraphs, each serving a specific purpose:
+## Instructions
+- **Summarize the overall sentiment** (positive, negative, or mixed) in 1-2 sentences.
+- **Highlight the top 2-3 recurring themes or opinions** (e.g., praise, criticism, suggestions) using bullet points.
+- **Identify any outlier or unique perspectives** if present.
+- **Provide 2 actionable insights** for the video creator, each as a bullet point.
+- Use markdown headings, bold for key points, and bullet points for clarity.
+- Be concise, specific, and avoid generic statements.
+- Do not repeat information; focus on what matters most to creators.
 
-**PARAGRAPH 1 - AUDIENCE RECEPTION:**
-Determine overall sentiment (positive/mixed/negative) and audience engagement level. Identify the primary emotional reactions and general consensus.
+## Output Format Example
 
-**PARAGRAPH 2 - CONTENT QUALITY INSIGHTS:**
-Analyze what viewers specifically praised or criticized about the video content, presentation style, information accuracy, and production quality.
+### Sentiment
+**Overall:** Positive
 
-**PARAGRAPH 3 - KEY THEMES & TOPICS:**
-Identify the main subjects, concerns, or topics that dominate the discussion. Highlight recurring patterns in viewer feedback.
+### Key Themes
+- **High praise** for video clarity and editing.
+- **Requests** for more in-depth examples.
+- **Mixed feedback** on pacing.
 
-**PARAGRAPH 4 - ACTIONABLE SUMMARY:**
-Provide a brief, balanced conclusion with the most important takeaways for content creators.
+### Unique Opinions
+- One viewer suggested adding subtitles for accessibility.
 
-WRITING GUIDELINES:
-- Write in a professional, analytical tone
-- Use specific, concrete language rather than vague generalizations
-- Include quantitative insights when patterns are clear (e.g., "majority," "several," "few")
-- Avoid repetitive phrasing between paragraphs
-- Focus on actionable insights rather than just listing opinions
-- Maintain objectivity while being decisive in your analysis
+### Actionable Insights
+- Consider adding more detailed examples in future videos.
+- Explore adding subtitles to improve accessibility.
 
-Begin your analysis now:`;
-}
-
-// Fallback prompt for smaller comment sets
-function createSimplePrompt(comments) {
-    const commentText = comments.join('\n• ');
-    
-    return `Analyze these YouTube comments and provide a concise, insightful summary in 2-3 paragraphs:
-
-• ${commentText}
-
-Focus on:
-1. Overall audience sentiment and engagement
-2. Specific content feedback and key themes
-3. Most important takeaways for understanding viewer reception
-
-Write professionally and analytically, avoiding generic statements. Be specific about what viewers liked, disliked, or found noteworthy.`;
+Now, analyze the comments and provide your summary in this format.
+`.trim();
 }
 
 // Enhanced API configuration
@@ -104,13 +92,12 @@ const getGeminiConfig = (prompt) => ({
     ]
 });
 
-// Post-processing for better formatting
+// Post-processing for better markdown formatting
 function formatSummary(rawSummary) {
     return rawSummary
         .replace(/\*\*(.*?)\*\*/g, '**$1**') // Preserve markdown
         .replace(/\n{3,}/g, '\n\n') // Normalize spacing
         .replace(/^\s+|\s+$/g, '') // Trim whitespace
-        .replace(/([.!?])\s*([A-Z])/g, '$1 $2') // Fix spacing after punctuation
         .split('\n')
         .map(line => line.trim())
         .filter(line => line.length > 0)
@@ -118,79 +105,85 @@ function formatSummary(rawSummary) {
 }
 
 app.post("/summarize", async (req, res) => {
-    const { comments, metadata } = req.body;
-    
+    const { comments } = req.body;
+
     // Enhanced input validation
     if (!comments || !Array.isArray(comments) || comments.length === 0) {
         return res.status(400).json({ 
             error: 'Invalid input: comments array is required and must not be empty' 
         });
     }
-    
+
     if (comments.length > 200) {
         return res.status(400).json({ 
             error: 'Too many comments: maximum 200 comments allowed per request' 
         });
     }
-    
+
     const processedComments = preprocessComments(comments);
-    
+
     if (processedComments.length < 3) {
         return res.status(400).json({ 
             error: 'Insufficient comments: at least 3 meaningful comments required for analysis' 
         });
     }
-    
-    const prompt = processedComments.length >= 20 
-        ? createAnalysisPrompt(processedComments)
-        : createSimplePrompt(processedComments);
-    
+
+    // Always use improved markdown prompt
+    const prompt = createMarkdownAnalysisPrompt(processedComments);
+
     const requestConfig = getGeminiConfig(prompt);
-    
+
     // Enhanced logging for debugging
     console.log(`Processing ${processedComments.length} comments (${comments.length} original)`);
     console.log(`Prompt length: ${prompt.length} characters`);
-    
+
     const requestId = Date.now().toString();
-    
-    const response = await axios.post(
-        `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
-        requestConfig,
-        {
-            headers: {
-                'Content-Type': 'application/json',
-                'x-request-id': requestId
-            },
-            timeout: 30000
+
+    try {
+        const response = await axios.post(
+            `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+            requestConfig,
+            {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-request-id': requestId
+                },
+                timeout: 30000
+            }
+        );
+
+        // Enhanced response validation
+        if (!response.data?.candidates?.[0]?.content?.parts?.[0]?.text) {
+            console.error('Invalid Gemini response structure:', JSON.stringify(response.data, null, 2));
+            return res.status(502).json({ 
+                error: 'Invalid response from AI service' 
+            });
         }
-    );
-    
-    // Enhanced response validation
-    if (!response.data?.candidates?.[0]?.content?.parts?.[0]?.text) {
-        console.error('Invalid Gemini response structure:', JSON.stringify(response.data, null, 2));
-        return res.status(502).json({ 
-            error: 'Invalid response from AI service' 
+
+        const rawSummary = response.data.candidates[0].content.parts[0].text;
+        const formattedSummary = formatSummary(rawSummary);
+
+        // Enhanced response with metadata
+        const responseData = {
+            summary: formattedSummary,
+            metadata: {
+                commentsProcessed: processedComments.length,
+                originalCount: comments.length,
+                analysisType: 'markdown-structured',
+                timestamp: new Date().toISOString(),
+                requestId: requestId
+            }
+        };
+
+        console.log(`Analysis complete. Request ID: ${requestId}, Summary length: ${formattedSummary.length} chars`);
+
+        res.json(responseData);
+    } catch (err) {
+        console.error('Error during Gemini API call:', err);
+        res.status(500).json({
+            error: 'Failed to generate summary'
         });
     }
-    
-    const rawSummary = response.data.candidates[0].content.parts[0].text;
-    const formattedSummary = formatSummary(rawSummary);
-    
-    // Enhanced response with metadata
-    const responseData = {
-        summary: formattedSummary,
-        metadata: {
-            commentsProcessed: processedComments.length,
-            originalCount: comments.length,
-            analysisType: processedComments.length >= 20 ? 'detailed' : 'simple',
-            timestamp: new Date().toISOString(),
-            requestId: requestId
-        }
-    };
-    
-    console.log(`Analysis complete. Request ID: ${requestId}, Summary length: ${formattedSummary.length} chars`);
-    
-    res.json(responseData);
 });
 
 // Health check endpoint
