@@ -30,27 +30,50 @@ function preprocessComments(comments) {
 }
 
 // -- Lightweight Prompt Template --
+// ...existing code...
+
+// -- Improved Prompt Template for Structured, Referenced Markdown Output --
 function createMarkdownPrompt(comments) {
     return `
-Analyze YouTube comments and write a **creator-focused markdown summary**.
+You are an expert YouTube audience analyst. Analyze the following comments and generate a concise, highly structured markdown report for the creator.
 
-### Comments
-- ${comments.join('\n- ')}
+## Comments
+${comments.map((c, i) => `- [C${i + 1}] ${c}`).join('\n')}
 
-### Format
-### Sentiment
-- One line only (Positive / Mixed / Negative).
+## Instructions
+- Use the output format below, with all headings and sections.
+- Reference specific comments by their [C#] tag where relevant.
+- Use clear markdown headings, bold for key points, and bullet points for clarity.
+- Be concise, specific, and avoid generic statements.
+- Do not repeat information; focus on what matters most to creators.
 
-### Key Opinions
-- Bullet points of repeated opinions or praise.
+## Output Format
 
-### Unique Views
-- Outlier, surprising, or emotional takes (if any).
+# YouTube Comments Analysis
 
-### Creator Insights
-- 2 short bullet tips the creator can use.
+## 1. Overall Sentiment
+**Summary:** (Concise sentiment summary, e.g., "Mostly positive with some constructive criticism.")
+
+## 2. Key Themes & Opinions
+- **Theme 1:** (Short description, reference comments, e.g., [C2], [C5])
+- **Theme 2:** (Short description, reference comments)
+- **Theme 3:** (Optional, short description, reference comments)
+
+## 3. Notable & Unique Opinions
+- (Describe any unique or surprising opinions, reference comments, or state "None noted.")
+
+## 4. Actionable Insights for Creator
+- (Insight 1, actionable and specific)
+- (Insight 2, actionable and specific)
+
+## 5. References
+- [C#]: Original comment text
+
+Now, provide your analysis in this format, referencing comments as needed.
 `.trim();
 }
+
+// ...existing code...
 
 // -- Gemini Request Config --
 const getGeminiConfig = (prompt) => ({
