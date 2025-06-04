@@ -12,201 +12,137 @@ app.use(express.json({ limit: '2mb' }));
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GEMINI_MODEL = 'gemini-1.5-flash';
 
-// Enhanced comment preprocessing
+// -- Optimized Comment Cleaner --
 function preprocessComments(comments) {
+    const unique = new Set();
     return comments
-        .filter(comment => comment && comment.trim().length > 5)
-        .map(comment => comment.trim().replace(/\s+/g, ' '))
-        .filter(comment => !comment.match(/^(first|second|third|early|late)$/i))
-        .slice(0, 120); // Limit for token efficiency
+        .map(c => c?.trim().replace(/\s+/g, ' '))
+        .filter(c =>
+            c &&
+            c.length >= 10 &&
+            c.length <= 800 &&
+            /\w/.test(c) &&
+            !c.includes('http') &&
+            !/^first|second|early|late$/i.test(c) &&
+            !unique.has(c) && unique.add(c)
+        )
+        .slice(0, 100); // Tighter limit for Gemini speed
 }
 
-// Improved prompt for concise, valuable, and well-structured markdown analysis
-function createMarkdownAnalysisPrompt(comments) {
-    const commentText = comments.join('\n- ');
+// -- Lightweight Prompt Template --
+function createMarkdownPrompt(comments) {
     return `
-You are an expert YouTube audience analyst. Your task is to analyze the following comments and produce a concise, actionable summary in **clear markdown**.
+Analyze YouTube comments and write a **creator-focused markdown summary**.
 
-## Comments to Analyze
-- ${commentText}
+### Comments
+- ${comments.join('\n- ')}
 
-## Instructions
-- **Summarize the overall sentiment** (positive, negative, or mixed) in 1-2 sentences.
-- **Highlight the top 2-3 recurring themes or opinions** (e.g., praise, criticism, suggestions) using bullet points.
-- **Identify any outlier or unique perspectives** if present.
-- **Provide 2 actionable insights** for the video creator, each as a bullet point.
-- Use markdown headings, bold for key points, and bullet points for clarity.
-- Be concise, specific, and avoid generic statements.
-- Do not repeat information; focus on what matters most to creators.
-
-## Output Format Example
-
+### Format
 ### Sentiment
-**Overall:** Positive
+- One line only (Positive / Mixed / Negative).
 
-### Key Themes
-- **High praise** for video clarity and editing.
-- **Requests** for more in-depth examples.
-- **Mixed feedback** on pacing.
+### Key Opinions
+- Bullet points of repeated opinions or praise.
 
-### Unique Opinions
-- One viewer suggested adding subtitles for accessibility.
+### Unique Views
+- Outlier, surprising, or emotional takes (if any).
 
-### Actionable Insights
-- Consider adding more detailed examples in future videos.
-- Explore adding subtitles to improve accessibility.
-
-Now, analyze the comments and provide your summary in this format.
+### Creator Insights
+- 2 short bullet tips the creator can use.
 `.trim();
 }
 
-// Enhanced API configuration
+// -- Gemini Request Config --
 const getGeminiConfig = (prompt) => ({
-    contents: [{
-        parts: [{ text: prompt }]
-    }],
+    contents: [{ parts: [{ text: prompt }] }],
     generationConfig: {
-        temperature: 0.3,
-        topK: 40,
-        topP: 0.8,
-        maxOutputTokens: 800,
-        stopSequences: []
+        temperature: 0.2,
+        topK: 20,
+        topP: 0.7,
+        maxOutputTokens: 600
     },
     safetySettings: [
-        {
-            category: "HARM_CATEGORY_HARASSMENT",
-            threshold: "BLOCK_MEDIUM_AND_ABOVE"
-        },
-        {
-            category: "HARM_CATEGORY_HATE_SPEECH", 
-            threshold: "BLOCK_MEDIUM_AND_ABOVE"
-        },
-        {
-            category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-            threshold: "BLOCK_MEDIUM_AND_ABOVE"
-        },
-        {
-            category: "HARM_CATEGORY_DANGEROUS_CONTENT",
-            threshold: "BLOCK_MEDIUM_AND_ABOVE"
-        }
+        { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" }
     ]
 });
 
-// Post-processing for better markdown formatting
-function formatSummary(rawSummary) {
-    return rawSummary
-        .replace(/\*\*(.*?)\*\*/g, '**$1**') // Preserve markdown
-        .replace(/\n{3,}/g, '\n\n') // Normalize spacing
-        .replace(/^\s+|\s+$/g, '') // Trim whitespace
+// -- Output Cleaner --
+function formatSummary(raw) {
+    return raw
+        .replace(/\*\*(.*?)\*\*/g, '**$1**') // Safe markdown bolding
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
         .split('\n')
-        .map(line => line.trim())
-        .filter(line => line.length > 0)
-        .join('\n\n');
+        .map(l => l.trim())
+        .filter(Boolean)
+        .join('\n');
 }
 
+// -- Main Analysis Endpoint --
 app.post("/summarize", async (req, res) => {
     const { comments } = req.body;
 
-    // Enhanced input validation
-    if (!comments || !Array.isArray(comments) || comments.length === 0) {
-        return res.status(400).json({ 
-            error: 'Invalid input: comments array is required and must not be empty' 
-        });
+    if (!Array.isArray(comments) || comments.length === 0) {
+        return res.status(400).json({ error: 'comments array is required' });
     }
 
-    if (comments.length > 200) {
-        return res.status(400).json({ 
-            error: 'Too many comments: maximum 200 comments allowed per request' 
-        });
+    const cleaned = preprocessComments(comments);
+    if (cleaned.length < 3) {
+        return res.status(400).json({ error: 'Minimum 3 quality comments required' });
     }
 
-    const processedComments = preprocessComments(comments);
-
-    if (processedComments.length < 3) {
-        return res.status(400).json({ 
-            error: 'Insufficient comments: at least 3 meaningful comments required for analysis' 
-        });
-    }
-
-    // Always use improved markdown prompt
-    const prompt = createMarkdownAnalysisPrompt(processedComments);
-
-    const requestConfig = getGeminiConfig(prompt);
-
-    // Enhanced logging for debugging
-    console.log(`Processing ${processedComments.length} comments (${comments.length} original)`);
-    console.log(`Prompt length: ${prompt.length} characters`);
-
+    const prompt = createMarkdownPrompt(cleaned);
     const requestId = Date.now().toString();
 
     try {
         const response = await axios.post(
             `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
-            requestConfig,
+            getGeminiConfig(prompt),
             {
                 headers: {
                     'Content-Type': 'application/json',
                     'x-request-id': requestId
                 },
-                timeout: 30000
+                timeout: 25000
             }
         );
 
-        // Enhanced response validation
-        if (!response.data?.candidates?.[0]?.content?.parts?.[0]?.text) {
-            console.error('Invalid Gemini response structure:', JSON.stringify(response.data, null, 2));
-            return res.status(502).json({ 
-                error: 'Invalid response from AI service' 
-            });
+        const raw = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!raw) {
+            return res.status(502).json({ error: 'Empty response from Gemini' });
         }
 
-        const rawSummary = response.data.candidates[0].content.parts[0].text;
-        const formattedSummary = formatSummary(rawSummary);
-
-        // Enhanced response with metadata
-        const responseData = {
-            summary: formattedSummary,
+        res.json({
+            summary: formatSummary(raw),
             metadata: {
-                commentsProcessed: processedComments.length,
-                originalCount: comments.length,
-                analysisType: 'markdown-structured',
-                timestamp: new Date().toISOString(),
-                requestId: requestId
+                processed: cleaned.length,
+                original: comments.length,
+                time: new Date().toISOString(),
+                requestId
             }
-        };
-
-        console.log(`Analysis complete. Request ID: ${requestId}, Summary length: ${formattedSummary.length} chars`);
-
-        res.json(responseData);
-    } catch (err) {
-        console.error('Error during Gemini API call:', err);
-        res.status(500).json({
-            error: 'Failed to generate summary'
         });
+
+    } catch (err) {
+        console.error(`[Gemini Error][${requestId}]`, err?.response?.data || err.message);
+        res.status(500).json({ error: 'Gemini summarization failed' });
     }
 });
 
-// Health check endpoint
+// Health check
 app.get('/health', (req, res) => {
-    res.json({ 
-        status: 'healthy', 
-        timestamp: new Date().toISOString(),
-        model: GEMINI_MODEL 
-    });
+    res.json({ status: 'ok', model: GEMINI_MODEL, timestamp: new Date().toISOString() });
 });
 
-// Error handling middleware
+// Final fallback error handler
 app.use((err, req, res, next) => {
-    console.error('Unhandled error:', err);
-    res.status(500).json({ 
-        error: 'Internal server error',
-        requestId: Date.now().toString()
-    });
+    console.error('[Unhandled]', err);
+    res.status(500).json({ error: 'Unexpected server error' });
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-    console.log(`Using Gemini model: ${GEMINI_MODEL}`);
-    console.log(`Health check available at: http://localhost:${PORT}/health`);
+    console.log(`🔵 Server running on port ${PORT}`);
 });
